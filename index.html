@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#17181a;
@@ -156,6 +157,14 @@
     padding:9px 10px;
     border-bottom:1px solid var(--border);
     white-space:nowrap;
+    cursor:pointer;
+    user-select:none;
+  }
+  table.tabla-semana thead th:hover{color:var(--amber);}
+  .sort-ind{
+    display:inline-block;
+    width:8px;
+    color:var(--amber);
   }
   table.tabla-semana td{
     padding:9px 10px;
@@ -534,19 +543,22 @@
 
 <main>
   <section class="mapa">
-    <div class="panel-title">Quejas pendientes <small>última semana</small></div>
+    <div class="panel-title">
+      <span>Quejas pendientes <small>última semana</small></span>
+      <button id="btn-exportar" class="btn-mini" type="button">Exportar a Excel</button>
+    </div>
     <div class="tabla-wrap">
       <div class="tabla-scroll">
         <table class="tabla-semana">
           <thead>
             <tr>
-              <th>Días</th>
-              <th>Barrio/Colonia</th>
-              <th>Sector</th>
-              <th>Fecha</th>
-              <th>Tipo</th>
-              <th>Estado</th>
-              <th>Descripción</th>
+              <th data-key="dias">Días <span class="sort-ind" data-for="dias"></span></th>
+              <th data-key="address">Barrio/Colonia <span class="sort-ind" data-for="address"></span></th>
+              <th data-key="zonaNombre">Sector <span class="sort-ind" data-for="zonaNombre"></span></th>
+              <th data-key="date">Fecha <span class="sort-ind" data-for="date"></span></th>
+              <th data-key="type">Tipo <span class="sort-ind" data-for="type"></span></th>
+              <th data-key="estado">Estado <span class="sort-ind" data-for="estado"></span></th>
+              <th data-key="desc">Descripción <span class="sort-ind" data-for="desc"></span></th>
             </tr>
           </thead>
           <tbody id="tabla-semana-body"></tbody>
@@ -579,6 +591,10 @@
           <option>Comercial</option>
           <option>Punto crítico / botadero clandestino</option>
         </select>
+      </div>
+      <div class="field">
+        <label for="f-dias">Días sin atención</label>
+        <input id="f-dias" type="number" min="0" step="1" placeholder="Ej. 5" required>
       </div>
       <div class="field">
         <label for="f-maps">Enlace de Google Maps (para ubicarlo en el mapa)</label>
@@ -649,7 +665,8 @@ function agruparDatos(zonasRaw, quejasRaw){
         type: q.tipo,
         desc: q.descripcion,
         mapQuery: q.map_query || null,
-        estado: q.estado || 'activa'
+        estado: q.estado || 'activa',
+        dias: (q.dias !== undefined && q.dias !== null && q.dias !== '') ? parseInt(q.dias, 10) : diasEntre(q.fecha)
       }))
   }));
 }
@@ -725,18 +742,41 @@ function render(){
   renderSelectZonas();
 }
 
-function renderTablaSemana(){
-  const body = document.getElementById('tabla-semana-body');
+let sortState = {key:'dias', dir:'desc'};
+
+function obtenerFilasSemana(){
   const filas = [];
   zonas.forEach(z=>{
     z.complaints.forEach(c=>{
-      const dias = diasEntre(c.date);
-      if(dias <= 7){
-        filas.push({...c, zonaNombre:z.name, zonaCode:z.code, dias, lvl:nivel(dias)});
+      if(diasEntre(c.date) <= 7){
+        filas.push({...c, zonaNombre:z.name, zonaCode:z.code, lvl:nivel(c.dias)});
       }
     });
   });
-  filas.sort((a,b)=> b.dias - a.dias || new Date(b.date)-new Date(a.date));
+  return ordenarFilas(filas);
+}
+
+function ordenarFilas(filas){
+  const {key, dir} = sortState;
+  const factor = dir === 'asc' ? 1 : -1;
+  return [...filas].sort((a,b)=>{
+    const va = a[key], vb = b[key];
+    if(typeof va === 'number' && typeof vb === 'number'){
+      return (va - vb) * factor;
+    }
+    return String(va ?? '').localeCompare(String(vb ?? '')) * factor;
+  });
+}
+
+function renderTablaSemana(){
+  const body = document.getElementById('tabla-semana-body');
+  const filas = obtenerFilasSemana();
+
+  document.querySelectorAll('.sort-ind').forEach(sp=>{
+    sp.textContent = sp.dataset.for === sortState.key
+      ? (sortState.dir === 'asc' ? '▲' : '▼')
+      : '';
+  });
 
   if(filas.length===0){
     body.innerHTML = `<tr><td colspan="7"><div class="empty">Sin quejas pendientes reportadas en los últimos 7 días.</div></td></tr>`;
@@ -755,6 +795,19 @@ function renderTablaSemana(){
     </tr>
   `).join('');
 }
+
+document.querySelectorAll('table.tabla-semana thead th[data-key]').forEach(th=>{
+  th.addEventListener('click', ()=>{
+    const key = th.dataset.key;
+    if(sortState.key === key){
+      sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+    }else{
+      sortState.key = key;
+      sortState.dir = (key==='dias') ? 'desc' : 'asc';
+    }
+    renderTablaSemana();
+  });
+});
 
 function capitalizar(s){
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
@@ -876,7 +929,7 @@ function renderPuntos(){
       const coords = extraerCoords(c.mapQuery);
       if(!coords){ sinCoords++; return; }
 
-      const dias = diasEntre(c.date);
+      const dias = c.dias;
       const lvl = nivel(dias);
       const marker = L.circleMarker([coords.lat, coords.lng], {
         radius: RADIO_LVL[lvl],
@@ -939,9 +992,10 @@ document.getElementById('form-queja').addEventListener('submit', async (e)=>{
   const zonaId = document.getElementById('f-zona').value;
   const barrio = document.getElementById('f-barrio').value.trim();
   const tipo = document.getElementById('f-tipo').value;
+  const dias = document.getElementById('f-dias').value;
   const desc = document.getElementById('f-desc').value.trim();
   const mapsInput = document.getElementById('f-maps').value.trim();
-  if(!barrio) return;
+  if(!barrio || dias === '') return;
 
   const z = zonas.find(x=>x.id===zonaId);
   const submitBtn = e.target.querySelector('.submit');
@@ -957,6 +1011,7 @@ document.getElementById('form-queja').addEventListener('submit', async (e)=>{
     barrio: barrio,
     tipo: tipo,
     fecha: hoy(),
+    dias: parseInt(dias, 10),
     descripcion: desc,
     map_query: mapsInput || null
   });
@@ -970,6 +1025,32 @@ document.getElementById('form-queja').addEventListener('submit', async (e)=>{
     mostrarToast('Queja registrada en ' + z.name);
     await cargar();
   }
+});
+
+document.getElementById('btn-exportar').addEventListener('click', ()=>{
+  const filas = obtenerFilasSemana();
+  if(filas.length===0){
+    mostrarToast('No hay quejas pendientes para exportar');
+    return;
+  }
+  const datos = filas.map(f => ({
+    'Días sin atención': f.dias,
+    'Barrio/Colonia': f.address,
+    'Sector': f.zonaNombre,
+    'Código de sector': f.zonaCode,
+    'Fecha de reporte': f.date,
+    'Tipo de residuo': f.type,
+    'Estado': capitalizar(f.estado),
+    'Descripción': f.desc || ''
+  }));
+  const hoja = XLSX.utils.json_to_sheet(datos);
+  hoja['!cols'] = [
+    {wch:16},{wch:22},{wch:14},{wch:16},{wch:14},{wch:26},{wch:12},{wch:40}
+  ];
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, 'Quejas pendientes');
+  XLSX.writeFile(libro, `quejas-pendientes-${hoy()}.xlsx`);
+  mostrarToast('Excel descargado');
 });
 
 cargar();
